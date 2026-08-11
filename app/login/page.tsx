@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../supabase';
 
-type AuthMode = 'login' | 'signup' | 'force_password_change';
+type AuthMode = 'login' | 'force_password_change';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,7 +13,6 @@ export default function LoginPage() {
   // שדות טופס
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [newPassword, setNewPassword] = useState('');
   
   const [loading, setLoading] = useState(false);
@@ -51,36 +50,7 @@ export default function LoginPage() {
     }
   };
 
-  // 2. תהליך הרשמה עצמית (משתמש חדש)
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fullName) return setErrorMsg('נא למלא שם מלא');
-    setLoading(true);
-    setErrorMsg('');
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        // העברת השם המלא למטא-דאטה כדי שהטריגר ב-Supabase יקרא אותו
-        data: {
-          full_name: fullName,
-          role: 'basic',
-          created_by_manager: 'false'
-        }
-      }
-    });
-
-    if (error) {
-      setErrorMsg(error.message);
-      setLoading(false);
-    } else {
-      alert('הרשמה בוצעה בהצלחה! אתה מועבר למערכת.');
-      router.push('/');
-    }
-  };
-
-  // 3. תהליך החלפת סיסמה כפויה (כניסה ראשונית)
+  // 2. תהליך החלפת סיסמה כפויה (כניסה ראשונית)
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPassword || newPassword.length < 6) {
@@ -120,7 +90,6 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold text-gray-900">VDC Reporting System</h1>
           <p className="text-sm text-gray-500 mt-1">
             {mode === 'login' && 'התחברות למערכת דיווחים'}
-            {mode === 'signup' && 'יצירת חשבון מהנדס VDC חדש'}
             {mode === 'force_password_change' && '🔐 הגדרת סיסמה חדשה (כניסה ראשונה)'}
           </p>
         </div>
@@ -163,63 +132,8 @@ export default function LoginPage() {
             >
               {loading ? 'מתחבר...' : 'כניסה למערכת'}
             </button>
-            <p className="text-xs text-center text-gray-500 pt-2">
-              משתמש חדש?{' '}
-              <button type="button" onClick={() => setMode('signup')} className="text-blue-600 font-bold hover:underline">
-                צור חשבון כאן
-              </button>
-            </p>
-          </form>
-        )}
-
-        {/* ---------------- טופס הרשמה עצמית ---------------- */}
-        {mode === 'signup' && (
-          <form onSubmit={handleSignUp} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">שם מלא</label>
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="ישראל ישראלי"
-                className="w-full rounded-xl border-gray-200 p-3 text-sm border focus:ring-2 focus:ring-blue-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">כתובת אימייל</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@tidhar.co.il"
-                className="w-full rounded-xl border-gray-200 p-3 text-sm border focus:ring-2 focus:ring-blue-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">סיסמה (מינימום 6 תווים)</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full rounded-xl border-gray-200 p-3 text-sm border focus:ring-2 focus:ring-blue-500 outline-none"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 transition shadow-md disabled:bg-gray-300"
-            >
-              {loading ? 'מייצר חשבון...' : 'הרשמה וסיום'}
-            </button>
-            <p className="text-xs text-center text-gray-500 pt-2">
-              כבר יש לך חשבון?{' '}
-              <button type="button" onClick={() => setMode('login')} className="text-blue-600 font-bold hover:underline">
-                חזור להתחברות
-              </button>
+            <p className="text-xs text-center text-gray-400 pt-2">
+              הגישה למערכת מותרת למשתמשים מאושרים בלבד על ידי מנהל המחלקה.
             </p>
           </form>
         )}

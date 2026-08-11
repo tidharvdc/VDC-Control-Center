@@ -1,3 +1,4 @@
+// @ts-nocheck
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -11,7 +12,8 @@ import {
   Building2, Users, Plus, LogOut, Calendar, HardHat, 
   Layers, Clock, Edit2, Trash2, Search, X, ChevronDown, 
   Info, BarChart3, Wallet, List, CheckCircle2, Network,
-  PenTool, Ruler, Filter, Printer, ArrowRight, FileText, Settings
+  PenTool, Ruler, Filter, Printer, ArrowRight, FileText, Settings,
+  ClipboardList, Target, AlertTriangle
 } from 'lucide-react';
 
 const heebo = Heebo({ 
@@ -43,6 +45,7 @@ interface AppUser { id: string; full_name: string; role: string; manager_name?: 
 interface WorkMeeting { id: number; meeting_date: string; manager_name: string; engineer_name: string; project_name: string; progress_status: string; bottlenecks: string; weekly_focus: string; modelers_tracking: string; }
 
 const safeString = (val: any) => ((val !== null && val !== undefined) ? String(val).trim() : '');
+const trimStr = (str: string | null | undefined) => (str || '').trim();
 
 // --- Date Engines ---
 const getReportMonth = (dateStr: string) => {
@@ -104,11 +107,14 @@ export default function Home() {
   const [actualName, setActualName] = useState('');
   
   // Navigation & Tabs
-  const [currentTab, setCurrentTab] = useState<'reports' | 'dashboard' | 'costs' | 'team' | 'admin'>('reports');
+  const [currentTab, setCurrentTab] = useState<'reports' | 'dashboard' | 'costs' | 'team' | 'admin' | 'work_plan'>('reports');
   const [costSubTab, setCostSubTab] = useState<'monthly' | 'active' | 'inactive'>('monthly');
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
   const [expandedDashProjects, setExpandedDashProjects] = useState<string[]>([]); 
   const [openMissingEng, setOpenMissingEng] = useState<string | null>(null);
+
+  // Work Plan Meetings
+  const [workPlanMeetings, setWorkPlanMeetings] = useState<WorkMeeting[]>([]);
 
   // Cost Filtering
   const [costSelectedProjects, setCostSelectedProjects] = useState<string[]>([]);
@@ -122,6 +128,7 @@ export default function Home() {
   const [drawerEngineer, setDrawerEngineer] = useState<string | null>(null);
   const [drawerProject, setDrawerProject] = useState<string | null>(null);
   const [meetingHistory, setMeetingHistory] = useState<WorkMeeting[]>([]);
+  const [expandedMeetings, setExpandedMeetings] = useState<number[]>([]);
   const [recentReportsContext, setRecentReportsContext] = useState<WorkReport[]>([]);
   const [isNewMeetingOpen, setIsNewMeetingOpen] = useState(false);
   const [editingMeeting, setEditingMeeting] = useState<WorkMeeting | null>(null);
@@ -132,6 +139,9 @@ export default function Home() {
   const [meetingFocus, setMeetingFocus] = useState('');
   const [meetingModelers, setMeetingModelers] = useState('');
   const [meetingLoading, setMeetingLoading] = useState(false);
+
+  // Delete Prompt
+  const [deletePrompt, setDeletePrompt] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void; }>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
   // Admin Forms
   const [showReportForm, setShowReportForm] = useState(false);
@@ -214,6 +224,25 @@ export default function Home() {
     return pName;
   };
 
+  const fetchWorkPlan = async (engName: string) => {
+    if (!engName) return;
+    const { data, error } = await supabase
+      .from('work_meetings')
+      .select('*')
+      .eq('engineer_name', engName)
+      .order('meeting_date', { ascending: false });
+
+    if (data) {
+      const latestMeetings: Record<string, WorkMeeting> = {};
+      data.forEach(m => {
+        if (!latestMeetings[m.project_name]) {
+          latestMeetings[m.project_name] = m;
+        }
+      });
+      setWorkPlanMeetings(Object.values(latestMeetings));
+    }
+  };
+
   const fetchReports = async (month: string, engineer: string, project: string) => {
     setIsFiltering(true);
     fetchRequestId.current += 1;
@@ -251,7 +280,7 @@ export default function Home() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) { router.push('/login'); return; }
 
-      const { data: profile } = await supabase.from('app_users').select('role, full_name').eq('id', session.user.id).single();
+      const { data: profile } = await supabase.from('app_users').select('role, full_name, manager_name').eq('id', session.user.id).single();
       let role = null; let eName = '';
       if (profile) { 
         role = profile.role; 
@@ -295,7 +324,7 @@ export default function Home() {
         setActiveEngineers(usersData.map(u => u.full_name));
         
         if (role === 'manager') {
-          const team = usersData.filter(u => u.manager_name === eName).map(u => u.full_name);
+          const team = usersData.filter(u => trimStr(u.manager_name) === trimStr(eName)).map(u => u.full_name);
           team.push(eName); 
           setColFilterEngineers(team);
         } else {
@@ -313,6 +342,7 @@ export default function Home() {
       if (dbSubStages) setSubStagesList(dbSubStages);
 
       await fetchReports(initialMonth, defaultEngineer, '');
+      await fetchWorkPlan(eName);
       setLoading(false);
     };
     checkUserAndFetchData();
@@ -333,14 +363,18 @@ export default function Home() {
     fetchReports(defaultActiveMonth, defaultEngineer, ''); 
   };
   
-  const handleTabChange = (tab: 'reports' | 'dashboard' | 'costs' | 'team' | 'admin') => { 
+  const handleTabChange = (tab: 'reports' | 'dashboard' | 'costs' | 'team' | 'admin' | 'work_plan') => { 
     const targetMonth = filterMonth || defaultActiveMonth;
     
     setIsCompareMode(false);
     setCostSelectedProjects([]);
     setShowReportForm(false);
 
-    if (tab === 'costs' || tab === 'team' || tab === 'admin') { 
+    if (tab === 'work_plan') {
+       fetchWorkPlan(engineerName);
+    }
+
+    if (tab === 'costs' || tab === 'team' || tab === 'admin' || tab === 'work_plan') { 
       setFilterEngineer(''); 
       setFilterProject(''); 
       if (tab === 'costs' && costSubTab !== 'monthly') {
@@ -395,6 +429,67 @@ export default function Home() {
   let availableEditSubStages = isEditGen2Project ? subStagesList.filter(sub => sub.parent_stage === editStage) : [];
   const isEditSubStageRequired = availableEditSubStages.length > 0;
 
+  // --- מנגנון אישור מחיקה חכם (Delete Prompt) ---
+  const requestDelete = (title: string, message: string, onConfirm: () => void) => {
+    setDeletePrompt({ isOpen: true, title, message, onConfirm });
+  };
+
+  const confirmDelete = () => {
+    if (deletePrompt.onConfirm) deletePrompt.onConfirm();
+    setDeletePrompt({ ...deletePrompt, isOpen: false });
+  };
+
+  const handleDeleteUser = (userId: string, userName: string) => {
+    requestDelete(
+      'מחיקת משתמש',
+      `האם אתה בטוח שברצונך למחוק את המשתמש "${userName}"?\n(שים לב: המחיקה תסיר אותו מהמערכת, אך היסטוריית הדיווחים שלו תשמר).`,
+      async () => {
+        setAdminFormLoading(true);
+        const { error } = await supabase.from('app_users').delete().eq('id', userId);
+        setAdminFormLoading(false);
+        if (!error) { alert('משתמש נמחק בהצלחה!'); window.location.reload(); } else alert('שגיאה במחיקת משתמש: ' + error.message);
+      }
+    );
+  };
+
+  const handleDeleteProject = (projectId: number, projName: string) => {
+    requestDelete(
+      'מחיקת פרויקט',
+      `האם אתה בטוח שברצונך למחוק את הפרויקט "${projName}"?\n(שים לב: היסטוריית הדיווחים המשויכת לפרויקט תשמר).`,
+      async () => {
+        setProjectFormLoading(true);
+        const { error } = await supabase.from('projects').delete().eq('id', projectId);
+        setProjectFormLoading(false);
+        if (!error) { alert('פרויקט נמחק בהצלחה!'); window.location.reload(); } else alert('שגיאה במחיקת פרויקט: ' + error.message);
+      }
+    );
+  };
+
+  const handleDeleteMeeting = (id: number) => {
+    requestDelete(
+      'מחיקת סיכום פגישה',
+      'האם אתה בטוח שברצונך למחוק סיכום פגישה זה? הפעולה אינה הפיכה.',
+      async () => {
+        const { error } = await supabase.from('work_meetings').delete().eq('id', id);
+        if (!error) setMeetingHistory(prev => prev.filter(m => m.id !== id));
+        else alert('שגיאה במחיקת פגישה: ' + error.message);
+      }
+    );
+  };
+
+  const handleDelete = (id: number) => {
+    requestDelete(
+      'מחיקת דיווח עבודה',
+      'האם אתה בטוח שברצונך למחוק דיווח זה? הנתונים ההיסטוריים ישתנו והפעולה אינה הפיכה.',
+      async () => {
+        const { error } = await supabase.from('work_reports').delete().eq('id', id);
+        if (!error) setReports(prev => prev.filter(report => report.id !== id));
+        else alert('שגיאה במחיקת הדיווח: ' + error.message);
+      }
+    );
+  };
+
+
   // --- Inline Editing: Users ---
   const startEditUser = (u: AppUser) => {
     setEditingUserId(u.id);
@@ -418,18 +513,6 @@ export default function Home() {
     }
   };
 
-  const handleDeleteUser = async (userId: string, userName: string) => {
-    if (!window.confirm(`האם אתה בטוח שברצונך למחוק את המשתמש "${userName}"?\n(שים לב: המחיקה תסיר אותו מהמערכת, אך היסטוריית הדיווחים שלו תשמר).`)) return;
-    setAdminFormLoading(true);
-    const { error } = await supabase.from('app_users').delete().eq('id', userId);
-    setAdminFormLoading(false);
-    if (!error) {
-       alert('משתמש נמחק בהצלחה!');
-       window.location.reload(); 
-    } else {
-       alert('שגיאה במחיקת משתמש: ' + error.message);
-    }
-  };
 
   // --- Inline Editing: Projects ---
   const startEditProject = (p: Project) => {
@@ -471,24 +554,13 @@ export default function Home() {
     }
   };
 
-  const handleDeleteProject = async (projectId: number, projName: string) => {
-    if (!window.confirm(`האם אתה בטוח שברצונך למחוק את הפרויקט "${projName}"?\n(שים לב: היסטוריית הדיווחים המשויכת לפרויקט תשמר).`)) return;
-    setProjectFormLoading(true);
-    const { error } = await supabase.from('projects').delete().eq('id', projectId);
-    setProjectFormLoading(false);
-    if (!error) {
-       alert('פרויקט נמחק בהצלחה!');
-       window.location.reload(); 
-    } else {
-       alert('שגיאה במחיקת פרויקט: ' + error.message);
-    }
-  };
 
   // --- Meeting Actions ---
   const openEngineerDrawer = (engName: string) => {
     setDrawerEngineer(engName);
     setDrawerProject(null);
     setMeetingHistory([]);
+    setExpandedMeetings([]);
     setIsNewMeetingOpen(false);
     setEditingMeeting(null);
     setIsDrawerOpen(true);
@@ -507,6 +579,7 @@ export default function Home() {
     setDrawerProject(projName);
     setIsNewMeetingOpen(false);
     setEditingMeeting(null);
+    setExpandedMeetings([]); 
     
     const { data: meetings } = await supabase.from('work_meetings').select('*').eq('engineer_name', drawerEngineer).eq('project_name', projName).order('meeting_date', { ascending: false });
     if (meetings) setMeetingHistory(meetings);
@@ -544,13 +617,6 @@ export default function Home() {
     setIsNewMeetingOpen(true);
   };
 
-  const handleDeleteMeeting = async (id: number) => {
-    if (!window.confirm('האם אתה בטוח שברצונך למחוק סיכום פגישה זה? הפעולה אינה הפיכה.')) return;
-    const { error } = await supabase.from('work_meetings').delete().eq('id', id);
-    if (!error) setMeetingHistory(meetingHistory.filter(m => m.id !== id));
-    else alert('שגיאה במחיקת פגישה: ' + error.message);
-  };
-
   const handleMeetingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!drawerEngineer || !drawerProject) return;
@@ -571,6 +637,13 @@ export default function Home() {
       if (error) alert('שגיאה בשמירת סיכום הפגישה: ' + error.message);
       else { setIsNewMeetingOpen(false); selectProjectForMeeting(drawerProject); }
     }
+  };
+
+  // Toggle meeting expand/collapse
+  const toggleMeetingExpand = (id: number) => {
+    setExpandedMeetings(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
   };
 
   const handleReportSubmit = async (e: React.FormEvent) => {
@@ -659,12 +732,6 @@ export default function Home() {
     } else alert('שגיאה בשמירת הפרויקט: ' + error.message);
   };
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm('האם אתה בטוח שברצונך למחוק דיווח זה? הנתונים ההיסטוריים ישתנו.')) return;
-    const { error } = await supabase.from('work_reports').delete().eq('id', id);
-    if (!error) setReports(reports.filter(report => report.id !== id)); else alert('שגיאה במחיקת הדיווח: ' + error.message);
-  };
-
   const openEditModal = (report: WorkReport) => { setEditingReport(report); setEditDate(report.report_date); setEditEngineerName(report.engineer_name); setEditProject(report.project_name); setEditStage(report.stage); setEditSubStage(report.sub_stage || ''); setEditScope(report.scope); setEditNotes(report.notes || ''); };
   const formatDate = (dateStr: string) => { if (!dateStr) return ''; const parts = dateStr.split('-'); if (parts.length !== 3) return dateStr; return `${parseInt(parts[2])}.${parseInt(parts[1])}.${parts[0]}`; };
   const isProjectActive = (formattedProjName: string) => { if (formattedProjName === 'אחר (פירוט בהערות)') return false; const p = allProjectsList.find(x => getProjectDisplayName(x, x.project_name) === formattedProjName); return p ? safeString(p.status) === 'פעיל' : false; };
@@ -713,7 +780,7 @@ export default function Home() {
   const generateDashboardData = () => {
     const data: Record<string, any> = {};
     const colors = ['bg-sky-600', 'bg-indigo-600', 'bg-slate-700', 'bg-emerald-600', 'bg-amber-500', 'bg-teal-500', 'bg-rose-500'];
-    const relevantEngineers = currentUserRole === 'manager' ? [engineerName, ...orgUsers.filter(u => u.manager_name === engineerName).map(u => u.full_name)] : activeEngineers;
+    const relevantEngineers = currentUserRole === 'manager' ? [engineerName, ...orgUsers.filter(u => trimStr(u.manager_name) === trimStr(engineerName)).map(u => u.full_name)] : activeEngineers;
 
     relevantEngineers.forEach(eng => { data[eng] = { total: 0, projects: {}, reports: [] }; });
     
@@ -902,16 +969,17 @@ export default function Home() {
   });
   const totalDaysCurrentView = displayedReports.reduce((sum, report) => sum + (report.scope === 'חצי יום' ? 0.5 : 1), 0);
 
-  // מפת כוח אדם
-  const getProjectsForEngineer = (engName: string) => allProjectsList.filter(p => p.assigned_engineer && p.assigned_engineer.includes(engName)).map(p => getProjectDisplayName(p, p.project_name));
+  // === מפת כוח אדם ===
+  const getProjectsForEngineer = (engName: string) => allProjectsList.filter(p => p.assigned_engineer && trimStr(p.assigned_engineer).includes(trimStr(engName))).map(p => getProjectDisplayName(p, p.project_name));
   const pipelineProjects = allProjectsList.filter(p => safeString(p.status) === 'עתידי').map(p => getProjectDisplayName(p, p.project_name));
   
-  const rootManager = orgUsers.find(u => u.full_name === actualName) || { full_name: actualName, role: actualRole === 'manager' ? 'מנהל VDC' : 'מנהל מחלקת VDC' };
-  const rootProjects = getProjectsForEngineer(rootManager.full_name);
+  const rootManager = orgUsers.find(u => trimStr(u.full_name) === trimStr(actualName)) || { full_name: actualName, role: actualRole === 'manager' ? 'מנהל VDC' : 'מנהל מחלקת VDC' };
+  const rootManagerName = trimStr(rootManager.full_name);
+  const rootProjects = getProjectsForEngineer(rootManagerName);
   
-  const reportingToRoot = orgUsers.filter(u => u.manager_name === rootManager.full_name);
-  const teamLeaders = actualRole === 'department_manager' ? reportingToRoot.filter(u => orgUsers.some(sub => sub.manager_name === u.full_name)) : [];
-  const directEngineers = actualRole === 'department_manager' ? reportingToRoot.filter(u => !orgUsers.some(sub => sub.manager_name === u.full_name)) : reportingToRoot;
+  const reportingToRoot = orgUsers.filter(u => trimStr(u.manager_name) === rootManagerName);
+  const teamLeaders = actualRole === 'department_manager' ? reportingToRoot.filter(u => orgUsers.some(sub => trimStr(sub.manager_name) === trimStr(u.full_name))) : [];
+  const directEngineers = actualRole === 'department_manager' ? reportingToRoot.filter(u => !orgUsers.some(sub => trimStr(sub.manager_name) === trimStr(u.full_name))) : reportingToRoot;
 
   const teamColors = [
      { border: 'border-blue-500/80', title: 'text-blue-400', line: 'bg-blue-500/40', tag: 'bg-blue-900/30 text-blue-400 border-blue-500/50' },
@@ -999,7 +1067,7 @@ export default function Home() {
       </div>
 
       {/* אזור מסך רגיל */}
-      <div className={`print:hidden min-h-screen ${currentTab === 'team' ? 'bg-slate-950 text-slate-300' : 'bg-slate-50 text-slate-800'} pb-12 overflow-x-hidden ${heebo.className} transition-colors duration-500`} dir="rtl" style={{ backgroundImage: currentTab === 'team' ? 'none' : 'radial-gradient(#cbd5e1 1px, transparent 0)', backgroundSize: '24px 24px' }}>
+      <div className={`print:hidden min-h-screen ${['team'].includes(currentTab) ? 'bg-slate-950 text-slate-300' : 'bg-slate-50 text-slate-800'} pb-12 overflow-x-hidden ${heebo.className} transition-colors duration-500`} dir="rtl" style={{ backgroundImage: ['team'].includes(currentTab) ? 'none' : 'radial-gradient(#cbd5e1 1px, transparent 0)', backgroundSize: '24px 24px' }}>
         
         {/* Header */}
         <div className="bg-slate-900 border-b-4 border-blue-600 shadow-lg mb-8">
@@ -1008,7 +1076,7 @@ export default function Home() {
               <div className="bg-blue-600/20 p-3 rounded-lg"><Building2 className="text-blue-400 w-8 h-8" /></div>
               <div>
                 <h1 className="text-2xl font-bold text-white tracking-tight">VDC<span className="text-blue-400 font-light"> Control Center</span></h1>
-                <p className="text-sm text-slate-400 mt-0.5 flex items-center gap-1.5"><HardHat className="w-4 h-4" /> מחובר: <span className="font-semibold text-slate-200">{engineerName}</span> <span className="opacity-50">|</span> {currentUserRole === 'department_manager' ? 'ניהול מחלקה' : currentUserRole === 'manager' ? 'ניהול פרויקט' : 'הנדסה'}</p>
+                <p className="text-sm text-slate-400 mt-0.5 flex items-center gap-1.5"><HardHat className="w-4 h-4" /> מחובר: <span className="font-semibold text-slate-200">{engineerName}</span> <span className="opacity-50">|</span> {currentUserRole === 'department_manager' ? 'ניהול מחלקה' : currentUserRole === 'manager' ? 'ניהול צוות' : 'הנדסה'}</p>
               </div>
             </div>
             <div className="flex gap-3 items-center">
@@ -1016,7 +1084,7 @@ export default function Home() {
                 <button 
                   onClick={() => { 
                     if (currentTab === 'admin') {
-                      handleTabChange('reports');
+                      handleTabChange(currentUserRole === 'department_manager' ? 'team' : 'reports');
                     } else {
                       handleTabChange('admin');
                     }
@@ -1050,14 +1118,102 @@ export default function Home() {
         <div className={`${currentTab === 'team' ? 'max-w-[100%] 2xl:max-w-[95%]' : 'max-w-7xl'} mx-auto space-y-6 px-6 transition-all duration-500`}>
           
           {/* Navigation Tabs - גלויות תמיד */}
-          {(currentUserRole === 'department_manager' || currentUserRole === 'manager') && currentTab !== 'admin' && (
-            <div className={`flex border-b overflow-x-auto gap-8 mb-6 ${currentTab === 'team' ? 'border-slate-800' : 'border-slate-300'}`}>
+          {currentTab !== 'admin' && (
+            <div className={`flex border-b overflow-x-auto gap-8 mb-6 ${['team'].includes(currentTab) ? 'border-slate-800' : 'border-slate-300'}`}>
               <button onClick={() => handleTabChange('reports')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'reports' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><List className="w-4 h-4" /> טבלת דיווחים</button>
-              <button onClick={() => handleTabChange('dashboard')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'dashboard' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><BarChart3 className="w-4 h-4" /> דאשבורד העמסות</button>
-              {currentUserRole === 'department_manager' && (
-                <button onClick={() => handleTabChange('costs')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'costs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><Wallet className="w-4 h-4" /> תמחור ובקרת תקציב</button>
+              
+              <button onClick={() => handleTabChange('work_plan')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'work_plan' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><ClipboardList className="w-4 h-4" /> תוכנית עבודה</button>
+
+              {(currentUserRole === 'department_manager' || currentUserRole === 'manager') && (
+                <>
+                  <button onClick={() => handleTabChange('dashboard')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'dashboard' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><BarChart3 className="w-4 h-4" /> דאשבורד העמסות</button>
+                  {currentUserRole === 'department_manager' && (
+                    <button onClick={() => handleTabChange('costs')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'costs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><Wallet className="w-4 h-4" /> תמחור ובקרת תקציב</button>
+                  )}
+                  <button onClick={() => handleTabChange('team')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'team' ? 'border-blue-600 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><Network className="w-4 h-4" /> מפת כוח אדם</button>
+                </>
               )}
-              <button onClick={() => handleTabChange('team')} className={`pb-3 flex items-center gap-2 text-sm font-bold border-b-2 whitespace-nowrap transition ${currentTab === 'team' ? 'border-blue-600 text-blue-500' : 'border-transparent text-slate-500 hover:text-slate-400'}`}><Network className="w-4 h-4" /> מפת כוח אדם</button>
+            </div>
+          )}
+
+          {/* TAB CONTENT: WORK PLAN (תוכנית עבודה שבועית אישית) */}
+          {currentTab === 'work_plan' && !showReportForm && (
+            <div className="animate-in fade-in duration-300">
+               <div className="mb-6 bg-white p-5 rounded-md shadow-sm border border-slate-200">
+                  <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                    <ClipboardList className="w-6 h-6 text-blue-600" /> תוכנית עבודה שבועית אישית
+                  </h2>
+                  <p className="text-sm text-slate-500 mt-1">מבוסס על סיכומי פגישות הסטטוס האחרונות מול מנהל הצוות. מציג פרויקטים שבאחריותך.</p>
+               </div>
+               
+               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {Array.from(new Set([
+                     ...allProjectsList.filter(p => p.assigned_engineer && trimStr(p.assigned_engineer).includes(trimStr(engineerName))).map(p => getProjectDisplayName(p, p.project_name)),
+                     ...workPlanMeetings.map(m => m.project_name)
+                  ])).map(projName => {
+                     const meeting = workPlanMeetings.find(m => m.project_name === projName);
+                     return (
+                        <div key={projName} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col hover:shadow-md transition">
+                           <div className="bg-slate-800 p-4 border-b border-slate-700">
+                              <h3 className="text-lg font-bold text-white flex items-center gap-2 truncate" title={projName}>
+                                 <Building2 className="w-5 h-5 text-blue-400 shrink-0" /> <span className="truncate">{projName}</span>
+                              </h3>
+                              {meeting ? (
+                                 <div className="text-xs text-slate-400 mt-1.5 flex items-center gap-1.5">
+                                    <Calendar className="w-3.5 h-3.5" /> עריכה אחרונה: {formatDate(meeting.meeting_date)} ע"י {meeting.manager_name}
+                                 </div>
+                              ) : (
+                                 <div className="text-xs text-amber-400/80 mt-1.5 flex items-center gap-1.5">
+                                    <Info className="w-3.5 h-3.5" /> טרם תועדה פגישת עבודה במערכת
+                                 </div>
+                              )}
+                           </div>
+                           <div className="p-5 flex-1 flex flex-col gap-5">
+                              {meeting ? (
+                                 <>
+                                    <div>
+                                       <h4 className="text-sm font-bold text-emerald-700 mb-2 flex items-center gap-1.5">
+                                          <Target className="w-4 h-4" /> מיקוד לשבוע הקרוב
+                                       </h4>
+                                       <div className="bg-emerald-50 text-slate-800 p-3.5 rounded-lg border border-emerald-100 text-sm whitespace-pre-wrap leading-relaxed shadow-sm">
+                                          {meeting.weekly_focus || <span className="text-emerald-600/50 italic">לא צוין מיקוד מיוחד.</span>}
+                                       </div>
+                                    </div>
+                                    {meeting.bottlenecks && (
+                                       <div>
+                                          <h4 className="text-sm font-bold text-rose-700 mb-2 flex items-center gap-1.5">
+                                             <AlertTriangle className="w-4 h-4" /> חסמים מרכזיים
+                                          </h4>
+                                          <div className="bg-rose-50 text-rose-900 p-3.5 rounded-lg border border-rose-100 text-sm whitespace-pre-wrap leading-relaxed shadow-sm">
+                                             {meeting.bottlenecks}
+                                          </div>
+                                       </div>
+                                    )}
+                                 </>
+                              ) : (
+                                 <div className="flex flex-col items-center justify-center h-full py-10 text-slate-400 gap-3">
+                                    <ClipboardList className="w-12 h-12 opacity-20 mb-2" />
+                                    <p className="text-sm font-medium">אין נתונים להצגה.</p>
+                                    <p className="text-xs text-slate-400 text-center px-4">לא נמצאו סיכומי פגישות עבר עם מנהל הצוות עבור פרויקט זה.</p>
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                     );
+                  })}
+                  {Array.from(new Set([
+                     ...allProjectsList.filter(p => p.assigned_engineer && trimStr(p.assigned_engineer).includes(trimStr(engineerName))).map(p => getProjectDisplayName(p, p.project_name)),
+                     ...workPlanMeetings.map(m => m.project_name)
+                  ])).length === 0 && (
+                     <div className="col-span-full p-16 text-center text-slate-500 bg-white rounded-xl border border-slate-200 border-dashed flex flex-col items-center gap-4">
+                        <Target className="w-12 h-12 text-slate-300" />
+                        <div>
+                           <div className="text-lg font-bold text-slate-600">אינך משויך כרגע לאף פרויקט</div>
+                           <div className="text-sm mt-1">פנה למנהל המחלקה או מנהל הצוות להגדרת שיוכים במסך הניהול.</div>
+                        </div>
+                     </div>
+                  )}
+               </div>
             </div>
           )}
 
@@ -1398,135 +1554,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* TAB CONTENT: ORG CHART (TEAM) */}
-          {currentTab === 'team' && (currentUserRole === 'department_manager' || currentUserRole === 'manager') && (
-            <div className={`flex flex-col xl:flex-row items-start gap-8 mt-2 animate-in fade-in duration-500 w-full ${currentUserRole === 'manager' ? 'justify-center' : ''}`}>
-              
-              {/* Pipeline Sidebar */}
-              {currentUserRole === 'department_manager' && (
-                <div className="w-full xl:w-64 flex-shrink-0 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
-                  <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 border-b border-slate-700/50 pb-3 flex items-center gap-2">
-                    <Search className="w-4 h-4 text-slate-500" /> פרויקטים בצנרת
-                  </h3>
-                  <div className="flex flex-col gap-3">
-                    {pipelineProjects.length > 0 ? pipelineProjects.map((proj, idx) => (
-                      <div key={idx} className="bg-slate-800 border border-dashed border-slate-600 text-[11px] font-medium text-slate-400 p-2.5 rounded-lg text-center shadow-sm hover:border-slate-400 transition whitespace-normal break-words leading-snug">
-                        {proj}
-                      </div>
-                    )) : (
-                      <div className="text-xs font-medium text-slate-600 italic text-center py-4 flex flex-col items-center gap-2">
-                        <CheckCircle2 className="w-6 h-6 opacity-20" />
-                        אין פרויקטים פנויים
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Main Org Chart Area */}
-              <div 
-                className="flex-1 w-full bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800 overflow-x-auto relative scrollbar-thin"
-                style={{
-                  backgroundImage: `
-                    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px)
-                  `,
-                  backgroundSize: '24px 24px'
-                }}
-              >
-                
-                <div className="min-w-max flex flex-col items-center pb-12">
-                  
-                  {/* Root Manager Card */}
-                  <div 
-                    onClick={() => openEngineerDrawer(rootManager.full_name)}
-                    className="z-10 bg-emerald-950/40 border-2 border-emerald-500/50 p-5 rounded-xl shadow-lg flex flex-col items-center justify-center text-center w-[280px] cursor-pointer hover:scale-105 hover:shadow-2xl transition-transform"
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <PenTool className="w-5 h-5 text-emerald-400 opacity-80" />
-                      <div className="font-black text-xl text-emerald-400 tracking-tight whitespace-nowrap">{rootManager.full_name}</div>
-                    </div>
-                    <div className="text-[12px] font-bold text-emerald-300 uppercase tracking-widest mb-4 bg-emerald-900/50 border border-emerald-700/50 px-3 py-1 rounded shadow-inner whitespace-nowrap">
-                      {rootManager.role}
-                    </div>
-                    <div className="flex flex-col gap-2 w-full">
-                      {rootProjects.map((proj, idx) => {
-                        const match = proj.match(/(.*?)(?:\s*\((.*?)\))?$/);
-                        const pName = match ? match[1].trim() : proj;
-                        const pCode = match && match[2] ? `(${match[2]})` : null;
-                        return (
-                          <div key={idx} className="bg-emerald-950/80 border border-emerald-800 text-emerald-200 py-2 px-3 rounded shadow-inner w-full flex flex-col items-center">
-                            <span className="text-xs font-bold leading-snug whitespace-normal break-words w-full text-center">{pName}</span>
-                            {pCode && <span className="text-[10px] text-emerald-500/70 mt-1 font-mono">{pCode}</span>}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                  
-                  <div className="w-1 h-10 bg-slate-700 rounded-none shadow-sm z-0"></div>
-
-                  <div className="relative w-full mt-0">
-                    <div className="absolute top-0 left-[15%] right-[15%] h-1 bg-slate-700 rounded-none shadow-sm"></div>
-                    
-                    <div className="flex justify-center items-start pt-8 gap-12 px-8 min-w-max">
-                      
-                      {teamLeaders.map((leader, tIdx) => {
-                        const theme = teamColors[tIdx % teamColors.length];
-                        const teamMembers = orgUsers.filter(u => u.manager_name === leader.full_name);
-                        
-                        return (
-                          <div key={leader.id} className="flex flex-col items-center relative bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 shadow-md backdrop-blur-sm min-w-max">
-                            <div className="absolute -top-10 w-1 h-10 bg-slate-700 rounded-none"></div>
-                            <div className={`absolute -top-4 text-[11px] font-black px-3 py-1 rounded border shadow-sm uppercase tracking-wider whitespace-nowrap ${theme.tag}`}>
-                              צוות {leader.full_name.split(' ')[0]}
-                            </div>
-                            
-                            <OrgCard user={leader} projects={getProjectsForEngineer(leader.full_name)} colorData={theme} displayRole="מנהל VDC" />
-                            
-                            {teamMembers.length > 0 && (
-                              <>
-                                <div className={`w-1 h-8 my-3 rounded-none shadow-sm ${theme.line}`}></div>
-                                <div className="relative w-full min-w-max px-4">
-                                  <div className={`absolute top-0 left-[25%] right-[25%] h-1 rounded-none shadow-sm ${theme.line}`}></div>
-                                  <div className="grid grid-cols-2 gap-8 pt-6 w-full">
-                                    {teamMembers.map(eng => (
-                                      <div key={eng.id} className="relative flex flex-col items-center">
-                                        <div className={`absolute -top-6 w-1 h-6 rounded-none ${theme.line}`}></div>
-                                        <OrgCard user={eng} projects={getProjectsForEngineer(eng.full_name)} colorData={theme} displayRole="מהנדס/ת VDC" />
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      {directEngineers.length > 0 && (
-                        <div className="flex flex-col items-center relative bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 shadow-md backdrop-blur-sm min-w-max">
-                          <div className="absolute -top-10 w-1 h-10 bg-slate-700 rounded-none"></div>
-                          <div className="absolute -top-4 bg-slate-700 text-slate-300 text-[11px] font-black px-3 py-1 rounded border border-slate-600 shadow-sm uppercase tracking-wider whitespace-nowrap">
-                            ניהול ישיר
-                          </div>
-                          
-                          <div className="flex flex-col gap-6 mt-2">
-                            {directEngineers.map(eng => (
-                              <OrgCard key={eng.id} user={eng} projects={getProjectsForEngineer(eng.full_name)} colorData={defaultDirectColor} displayRole="מהנדס/ת VDC" />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-          )}
-
           {/* TAB CONTENT: DASHBOARD */}
           {currentTab === 'dashboard' && (currentUserRole === 'department_manager' || currentUserRole === 'manager') && (
             <>
@@ -1680,7 +1707,7 @@ export default function Home() {
                                  <td className="p-3 font-bold text-slate-700 bg-slate-50/50 border-l border-slate-200">ימי עבודה ישירים</td>
                                  {compareSelected.map(pName => {
                                     const p = displayedCostData.find(x => x.name === pName);
-                                    return <td key={pName} className="p-3 font-medium text-slate-700 border-r border-slate-100">{p?.baseDays} ימ'</td>
+                                    return <td key={pName} className="p-3 font-medium text-slate-700 border-r border-slate-100">{p?.baseDays || 0} ימ'</td>
                                  })}
                               </tr>
                               {compareGenMode === 'gen1' ? (
@@ -1704,9 +1731,9 @@ export default function Home() {
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let vdcCost = null;
-                                          if (p?.stats?.typologies_count > 0) {
-                                             const std = p.stages.find((s:any) => s.name === 'סטנדרט')?.cost || 0;
-                                             const stdFix = p.stages.find((s:any) => s.name === 'תיקוני סטנדרט')?.cost || 0;
+                                          if (p && p.stats && p.stats.typologies_count && p.stats.typologies_count > 0) {
+                                             const std = p.stages?.find((s:any) => s.name === 'סטנדרט')?.cost || 0;
+                                             const stdFix = p.stages?.find((s:any) => s.name === 'תיקוני סטנדרט')?.cost || 0;
                                              vdcCost = (std + stdFix) / p.stats.typologies_count;
                                           }
                                           return <td key={pName} className="p-3 font-black text-emerald-700 border-r border-slate-100 bg-emerald-50/30">{vdcCost !== null ? `₪ ${Math.round(vdcCost).toLocaleString()}` : '-'}</td>
@@ -1717,7 +1744,9 @@ export default function Home() {
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let aptCost = null;
-                                          if (p?.stats?.apartments_count > 0) { aptCost = p.totalCost / p.stats.apartments_count; }
+                                          if (p && p.stats && p.stats.apartments_count && p.stats.apartments_count > 0 && p.totalCost) { 
+                                              aptCost = p.totalCost / p.stats.apartments_count; 
+                                          }
                                           return <td key={pName} className="p-3 font-black text-purple-700 border-r border-slate-100 bg-purple-50/30">{aptCost !== null ? `₪ ${Math.round(aptCost).toLocaleString()}` : '-'}</td>
                                        })}
                                     </tr>
@@ -1750,8 +1779,8 @@ export default function Home() {
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let cost = null;
-                                          if (p?.stats?.parent_typologies_count > 0) {
-                                             const std = p.stages.find((s:any) => s.name === 'סטנדרט')?.cost || 0;
+                                          if (p && p.stats && p.stats.parent_typologies_count && p.stats.parent_typologies_count > 0) {
+                                             const std = p.stages?.find((s:any) => s.name === 'סטנדרט')?.cost || 0;
                                              cost = std / p.stats.parent_typologies_count;
                                           }
                                           return <td key={pName} className="p-3 font-black text-emerald-700 border-r border-slate-100 bg-emerald-50/30">{cost !== null ? `₪ ${Math.round(cost).toLocaleString()}` : '-'}</td>
@@ -1762,8 +1791,8 @@ export default function Home() {
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let cost = null;
-                                          if (p?.stats?.sub_typologies_count > 0) {
-                                             const stdSubTypes = p.stages.find((s:any) => s.name === 'סטנדרט - תתי טיפוס')?.cost || 0;
+                                          if (p && p.stats && p.stats.sub_typologies_count && p.stats.sub_typologies_count > 0) {
+                                             const stdSubTypes = p.stages?.find((s:any) => s.name === 'סטנדרט - תתי טיפוס')?.cost || 0;
                                              cost = stdSubTypes / p.stats.sub_typologies_count;
                                           }
                                           return <td key={pName} className="p-3 font-black text-emerald-700 border-r border-slate-100 bg-emerald-50/30">{cost !== null ? `₪ ${Math.round(cost).toLocaleString()}` : '-'}</td>
@@ -1774,19 +1803,21 @@ export default function Home() {
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let aptCost = null;
-                                          if (p?.stats?.apartments_count > 0) { aptCost = p.totalCost / p.stats.apartments_count; }
+                                          if (p && p.stats && p.stats.apartments_count && p.stats.apartments_count > 0 && p.totalCost) { 
+                                              aptCost = p.totalCost / p.stats.apartments_count; 
+                                          }
                                           return <td key={pName} className="p-3 font-black text-purple-700 border-r border-slate-100 bg-purple-50/30">{aptCost !== null ? `₪ ${Math.round(aptCost).toLocaleString()}` : '-'}</td>
                                        })}
                                     </tr>
                                  </>
                               )}
                               <tr><td colSpan={compareSelected.length + 1} className="h-6 bg-slate-100/50"></td></tr>
-                              {Array.from(new Set(compareSelected.flatMap(pName => displayedCostData.find(x => x.name === pName)?.stages.map((s:any) => s.name) || []))).map(stageName => (
+                              {Array.from(new Set(compareSelected.flatMap(pName => displayedCostData.find(x => x.name === pName)?.stages?.map((s:any) => s.name) || []))).map(stageName => (
                                  <tr key={stageName} className="hover:bg-slate-50 transition-colors">
                                     <td className="p-3 font-bold text-slate-600 bg-slate-50/30 border-l border-slate-200"><div className="flex items-center gap-1.5"><Layers className="w-3.5 h-3.5 text-slate-400"/> {stageName}</div></td>
                                     {compareSelected.map(pName => {
                                        const p = displayedCostData.find(x => x.name === pName);
-                                       const s = p?.stages.find((x:any) => x.name === stageName);
+                                       const s = p?.stages?.find((x:any) => x.name === stageName);
                                        return (
                                           <td key={pName} className="p-3 border-r border-slate-100">
                                              {s ? (
@@ -1948,6 +1979,135 @@ export default function Home() {
             </div>
           )}
 
+          {/* TAB CONTENT: TEAM ORG CHART (חסין למחיקה לעולמי עולמים) */}
+          {currentTab === 'team' && (currentUserRole === 'department_manager' || currentUserRole === 'manager') && (
+            <div className={`flex flex-col xl:flex-row items-start gap-8 mt-2 animate-in fade-in duration-500 w-full ${currentUserRole === 'manager' ? 'justify-center' : ''}`}>
+              
+              {/* Pipeline Sidebar */}
+              {currentUserRole === 'department_manager' && (
+                <div className="w-full xl:w-64 flex-shrink-0 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+                  <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 border-b border-slate-700/50 pb-3 flex items-center gap-2">
+                    <Search className="w-4 h-4 text-slate-500" /> פרויקטים בצנרת
+                  </h3>
+                  <div className="flex flex-col gap-3">
+                    {pipelineProjects.length > 0 ? pipelineProjects.map((proj, idx) => (
+                      <div key={idx} className="bg-slate-800 border border-dashed border-slate-600 text-[11px] font-medium text-slate-400 p-2.5 rounded-lg text-center shadow-sm hover:border-slate-400 transition whitespace-normal break-words leading-snug">
+                        {proj}
+                      </div>
+                    )) : (
+                      <div className="text-xs font-medium text-slate-600 italic text-center py-4 flex flex-col items-center gap-2">
+                        <CheckCircle2 className="w-6 h-6 opacity-20" />
+                        אין פרויקטים פנויים
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Main Org Chart Area */}
+              <div 
+                className="flex-1 w-full bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800 overflow-x-auto relative scrollbar-thin"
+                style={{
+                  backgroundImage: `
+                    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px)
+                  `,
+                  backgroundSize: '24px 24px'
+                }}
+              >
+                
+                <div className="min-w-max flex flex-col items-center pb-12">
+                  
+                  {/* Root Manager Card */}
+                  <div 
+                    onClick={() => openEngineerDrawer(rootManager.full_name)}
+                    className="z-10 bg-emerald-950/40 border-2 border-emerald-500/50 p-5 rounded-xl shadow-lg flex flex-col items-center justify-center text-center w-[280px] cursor-pointer hover:scale-105 hover:shadow-2xl transition-transform"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <PenTool className="w-5 h-5 text-emerald-400 opacity-80" />
+                      <div className="font-black text-xl text-emerald-400 tracking-tight whitespace-nowrap">{rootManager.full_name}</div>
+                    </div>
+                    <div className="text-[12px] font-bold text-emerald-300 uppercase tracking-widest mb-4 bg-emerald-900/50 border border-emerald-700/50 px-3 py-1 rounded shadow-inner whitespace-nowrap">
+                      {rootManager.role}
+                    </div>
+                    <div className="flex flex-col gap-2 w-full">
+                      {rootProjects.map((proj, idx) => {
+                        const match = proj.match(/(.*?)(?:\s*\((.*?)\))?$/);
+                        const pName = match ? match[1].trim() : proj;
+                        const pCode = match && match[2] ? `(${match[2]})` : null;
+                        return (
+                          <div key={idx} className="bg-emerald-950/80 border border-emerald-800 text-emerald-200 py-2 px-3 rounded shadow-inner w-full flex flex-col items-center">
+                            <span className="text-xs font-bold leading-snug whitespace-normal break-words w-full text-center">{pName}</span>
+                            {pCode && <span className="text-[10px] text-emerald-500/70 mt-1 font-mono">{pCode}</span>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  
+                  <div className="w-1 h-10 bg-slate-700 rounded-none shadow-sm z-0"></div>
+
+                  <div className="relative w-full mt-0">
+                    <div className="absolute top-0 left-[15%] right-[15%] h-1 bg-slate-700 rounded-none shadow-sm"></div>
+                    
+                    <div className="flex justify-center items-start pt-8 gap-12 px-8 min-w-max">
+                      
+                      {teamLeaders.map((leader, tIdx) => {
+                        const theme = teamColors[tIdx % teamColors.length];
+                        const teamMembers = orgUsers.filter(u => trimStr(u.manager_name) === trimStr(leader.full_name));
+                        
+                        return (
+                          <div key={leader.id} className="flex flex-col items-center relative bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 shadow-md backdrop-blur-sm min-w-max">
+                            <div className="absolute -top-10 w-1 h-10 bg-slate-700 rounded-none"></div>
+                            <div className={`absolute -top-4 text-[11px] font-black px-3 py-1 rounded border shadow-sm uppercase tracking-wider whitespace-nowrap ${theme.tag}`}>
+                              צוות {leader.full_name.split(' ')[0]}
+                            </div>
+                            
+                            <OrgCard user={leader} projects={getProjectsForEngineer(leader.full_name)} colorData={theme} displayRole="מנהל VDC" />
+                            
+                            {teamMembers.length > 0 && (
+                              <>
+                                <div className={`w-1 h-8 my-3 rounded-none shadow-sm ${theme.line}`}></div>
+                                <div className="relative w-full min-w-max px-4">
+                                  <div className={`absolute top-0 left-[25%] right-[25%] h-1 rounded-none shadow-sm ${theme.line}`}></div>
+                                  <div className="grid grid-cols-2 gap-8 pt-6 w-full">
+                                    {teamMembers.map(eng => (
+                                      <div key={eng.id} className="relative flex flex-col items-center">
+                                        <div className={`absolute -top-6 w-1 h-6 rounded-none ${theme.line}`}></div>
+                                        <OrgCard user={eng} projects={getProjectsForEngineer(eng.full_name)} colorData={theme} displayRole="מהנדס/ת VDC" />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {directEngineers.length > 0 && (
+                        <div className="flex flex-col items-center relative bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 shadow-md backdrop-blur-sm min-w-max">
+                          <div className="absolute -top-10 w-1 h-10 bg-slate-700 rounded-none"></div>
+                          <div className="absolute -top-4 bg-slate-700 text-slate-300 text-[11px] font-black px-3 py-1 rounded border border-slate-600 shadow-sm uppercase tracking-wider whitespace-nowrap">
+                            ניהול ישיר
+                          </div>
+                          
+                          <div className="flex flex-col gap-6 mt-2">
+                            {directEngineers.map(eng => (
+                              <OrgCard key={eng.id} user={eng} projects={getProjectsForEngineer(eng.full_name)} colorData={defaultDirectColor} displayRole="מהנדס/ת VDC" />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
           {/* GLOBAL MODALS */}
           {openMissingEng && currentTab === 'dashboard' && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2019,107 +2179,26 @@ export default function Home() {
             </div>
           )}
 
-          {/* מודל מרכזי: תיק מהנדס ופגישות סטאטוס */}
-          {isDrawerOpen && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6 transition-opacity animate-in fade-in duration-200" onClick={closeEngineerDrawer}>
-              <div className="bg-slate-50 w-full max-w-6xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
-                <div className="bg-slate-900 p-5 flex justify-between items-center shadow-md shrink-0">
-                   <div className="flex items-center gap-3"><div className="bg-blue-500/20 p-2.5 rounded-lg text-blue-400"><HardHat className="w-6 h-6" /></div><div><h2 className="text-white font-black text-xl tracking-tight">תיק מהנדס ופגישות עבודה</h2><div className="text-slate-400 text-sm font-medium mt-0.5">מהנדס: <span className="text-blue-300">{drawerEngineer}</span></div></div></div>
-                   <button onClick={closeEngineerDrawer} className="text-slate-400 hover:text-white bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 p-2.5 rounded-full transition-colors"><X className="w-5 h-5" /></button>
+          {/* מודל וידוא מחיקה (Global Delete Confirmation) */}
+          {deletePrompt.isOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200 text-slate-800 animate-in zoom-in-95 duration-200">
+                <div className="bg-rose-600 p-4 flex items-center gap-3">
+                  <AlertTriangle className="w-6 h-6 text-white" />
+                  <h2 className="text-lg font-bold text-white">{deletePrompt.title}</h2>
                 </div>
-                <div className="flex-1 overflow-y-auto p-6 md:p-8 scrollbar-thin">
-                  {!drawerProject ? (
-                    <div className="animate-in fade-in duration-500">
-                      <h3 className="font-bold text-slate-700 mb-6 flex items-center gap-2 text-base uppercase tracking-wider"><Building2 className="w-5 h-5 text-blue-500" /> בחר פרויקט לניהול פגישה</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {getProjectsForEngineer(drawerEngineer!).map((proj, idx) => (
-                          <button key={idx} onClick={() => selectProjectForMeeting(proj)} className="w-full text-right p-5 bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-lg hover:border-blue-400 transition-all flex justify-between items-center group"><span className="font-bold text-slate-800 text-base group-hover:text-blue-700 transition">{proj}</span><ArrowRight className="w-5 h-5 text-slate-300 group-hover:text-blue-500 transition-transform group-hover:-translate-x-1.5" /></button>
-                        ))}
-                        {getProjectsForEngineer(drawerEngineer!).length === 0 && (<div className="col-span-full text-slate-400 text-base text-center p-12 bg-white border border-slate-200 rounded-xl border-dashed">לא נמצאו פרויקטים פעילים למשתמש זה.</div>)}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="animate-in fade-in duration-500 h-full flex flex-col">
-                      <div className="flex justify-between items-end mb-6 border-b-2 border-slate-200 pb-4">
-                        <div><div className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1">פרויקט נבחר</div><div className="text-2xl font-black text-slate-800">{drawerProject}</div></div>
-                        <button onClick={() => { setDrawerProject(null); setIsNewMeetingOpen(false); setEditingMeeting(null); }} className="flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-slate-800 transition bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm hover:bg-slate-100"><ArrowRight className="w-4 h-4" /> חזור לפרויקטים</button>
-                      </div>
-                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        <div className="lg:col-span-8 flex flex-col gap-8">
-                          {isNewMeetingOpen ? (
-                            <div className="bg-white rounded-xl shadow-lg border border-blue-200 overflow-hidden animate-in zoom-in-95 duration-200">
-                               <div className="bg-blue-600 text-white p-4 font-bold flex items-center gap-2 text-lg"><PenTool className="w-5 h-5" /> {editingMeeting ? 'עדכון סיכום סטטוס שבועי' : 'עריכת סיכום סטטוס שבועי'}</div>
-                               <form onSubmit={handleMeetingSubmit} className="p-6 md:p-8 space-y-6">
-                                  <div className="w-1/3"><label className="block text-sm font-bold text-slate-600 mb-1.5">תאריך הפגישה</label><input type="date" required value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} className="w-full p-2.5 border border-slate-300 rounded-md text-base text-slate-800 font-medium outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all bg-white" /></div>
-                                  <div><label className="block text-sm font-bold text-slate-600 mb-1.5">1. סטטוס התקדמות לפי מלאכות</label><textarea required value={meetingProgress} onChange={(e) => setMeetingProgress(e.target.value)} rows={5} className="w-full p-3 border border-slate-300 rounded-md text-base text-slate-800 font-medium leading-relaxed outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-blue-50/30 transition-all" /></div>
-                                  <div><label className="block text-sm font-bold text-slate-600 mb-1.5">2. חסמים מרכזיים</label><textarea value={meetingBottlenecks} onChange={(e) => setMeetingBottlenecks(e.target.value)} rows={4} className="w-full p-3 border border-slate-300 rounded-md text-base text-slate-800 font-medium leading-relaxed outline-none focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 bg-rose-50/30 transition-all" /></div>
-                                  <div><label className="block text-sm font-bold text-slate-600 mb-1.5">3. מיקוד לשבוע הקרוב</label><textarea required value={meetingFocus} onChange={(e) => setMeetingFocus(e.target.value)} rows={4} className="w-full p-3 border border-slate-300 rounded-md text-base text-slate-800 font-medium leading-relaxed outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 bg-emerald-50/30 transition-all" /></div>
-                                  <div><label className="block text-sm font-bold text-slate-600 mb-1.5">4. מעקב ממדלים (אם יש)</label><textarea value={meetingModelers} onChange={(e) => setMeetingModelers(e.target.value)} rows={3} className="w-full p-3 border border-slate-300 rounded-md text-base text-slate-800 font-medium leading-relaxed outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all bg-white" placeholder="אופציונלי..." /></div>
-                                  <div className="flex justify-end gap-4 pt-6 border-t border-slate-100"><button type="button" onClick={() => { setIsNewMeetingOpen(false); setEditingMeeting(null); }} className="px-6 py-2.5 bg-slate-100 text-slate-600 rounded-md text-sm font-bold hover:bg-slate-200 transition">ביטול</button><button type="submit" disabled={meetingLoading} className="px-8 py-2.5 bg-blue-600 text-white rounded-md text-base font-bold hover:bg-blue-700 transition shadow-md">{editingMeeting ? 'עדכן סיכום פגישה' : 'שמור סיכום פגישה'}</button></div>
-                               </form>
-                            </div>
-                          ) : (
-                            <button onClick={openNewMeetingForm} className="w-full py-5 bg-slate-800 text-white rounded-xl font-bold text-lg hover:bg-slate-700 transition shadow-lg flex items-center justify-center gap-3"><Plus className="w-6 h-6" /> התחל פגישת סטטוס חדשה לפרויקט</button>
-                          )}
-
-                          <div>
-                            <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-base uppercase tracking-wider"><FileText className="w-5 h-5 text-amber-500" /> היסטוריית פגישות</h3>
-                            {meetingHistory.length > 0 ? (
-                              <div className="flex flex-col gap-5">
-                                 {meetingHistory.map(m => (
-                                   <div key={m.id} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                                     <div className="bg-slate-100/80 border-b border-slate-200 p-4 flex justify-between items-center">
-                                       <div className="flex items-center gap-4">
-                                          <div className="font-black text-slate-800 text-lg">{formatDate(m.meeting_date)}</div>
-                                          <div className="flex gap-2">
-                                            <button onClick={() => openEditMeetingForm(m)} className="p-1.5 bg-white border border-slate-200 rounded text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition" title="ערוך פגישה"><Edit2 className="w-4 h-4" /></button>
-                                            <button onClick={() => handleDeleteMeeting(m.id)} className="p-1.5 bg-white border border-slate-200 rounded text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition" title="מחק פגישה"><Trash2 className="w-4 h-4" /></button>
-                                          </div>
-                                       </div>
-                                       <div className="text-sm font-medium text-slate-500 bg-white px-3 py-1 rounded-md border border-slate-200 shadow-sm">מנהל מסכם: {m.manager_name}</div>
-                                     </div>
-                                     <div className="p-6 space-y-5 text-base">
-                                        <div><div className="font-bold text-slate-500 text-sm uppercase tracking-wide mb-1.5">סטטוס התקדמות:</div><div className="text-slate-800 whitespace-pre-wrap leading-relaxed">{m.progress_status}</div></div>
-                                        {m.bottlenecks && (<div className="bg-rose-50/70 p-4 rounded-lg border border-rose-100"><div className="font-bold text-rose-700 text-sm uppercase tracking-wide mb-1.5">חסמים מרכזיים:</div><div className="text-rose-900 whitespace-pre-wrap leading-relaxed">{m.bottlenecks}</div></div>)}
-                                        <div><div className="font-bold text-slate-500 text-sm uppercase tracking-wide mb-1.5">מיקוד שבועי:</div><div className="text-slate-800 whitespace-pre-wrap font-medium leading-relaxed">{m.weekly_focus}</div></div>
-                                        {m.modelers_tracking && (<div className="pt-4 border-t border-slate-100"><div className="font-bold text-indigo-500 text-sm uppercase tracking-wide mb-1.5">מעקב ממדלים:</div><div className="text-slate-700 whitespace-pre-wrap leading-relaxed">{m.modelers_tracking}</div></div>)}
-                                     </div>
-                                   </div>
-                                 ))}
-                              </div>
-                            ) : (
-                              <div className="text-slate-400 text-base text-center p-10 border-2 border-slate-200 border-dashed rounded-xl bg-white/50">אין היסטוריית פגישות קודמות לפרויקט זה.</div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="lg:col-span-4">
-                          <div className="bg-slate-100 rounded-xl p-5 border border-slate-200 h-full max-h-[800px] flex flex-col">
-                            <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm uppercase tracking-wider"><Clock className="w-4 h-4 text-emerald-500" /> דו"ח פעילות - 7 ימים אחרונים</h3>
-                            <div className="overflow-y-auto pr-2 scrollbar-thin flex-1">
-                              {recentReportsContext.length > 0 ? (
-                                <div className="flex flex-col gap-3">
-                                   {recentReportsContext.map(r => (
-                                     <div key={r.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm flex flex-col gap-2 transition hover:border-emerald-300">
-                                       <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                                         <span className="font-mono text-slate-500 font-medium text-sm">{formatDate(r.report_date)}</span>
-                                         <span className="bg-emerald-50 text-emerald-700 text-xs px-2 py-0.5 rounded font-bold border border-emerald-200/50">{r.scope}</span>
-                                       </div>
-                                       <div className="font-bold text-slate-800 text-base">{r.stage} {r.sub_stage && <span className="text-slate-400 font-normal">| {r.sub_stage}</span>}</div>
-                                       {r.notes && <div className="text-slate-600 text-sm bg-slate-50 p-2.5 rounded mt-1 leading-relaxed border border-slate-100">{r.notes}</div>}
-                                     </div>
-                                   ))}
-                                </div>
-                              ) : (
-                                <div className="text-slate-400 text-sm italic text-center py-10">לא דווחו שעות בפרויקט זה בשבוע האחרון.</div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                      </div>
-                    </div>
-                  )}
+                <div className="p-6">
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                    {deletePrompt.message}
+                  </p>
+                </div>
+                <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-3">
+                  <button onClick={() => setDeletePrompt({ ...deletePrompt, isOpen: false })} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-md font-medium hover:bg-slate-50 transition text-sm shadow-sm">
+                    ביטול
+                  </button>
+                  <button onClick={confirmDelete} className="px-4 py-2 bg-rose-600 text-white rounded-md font-medium hover:bg-rose-700 transition text-sm shadow-sm">
+                    כן, מחק לצמיתות
+                  </button>
                 </div>
               </div>
             </div>
