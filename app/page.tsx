@@ -108,7 +108,7 @@ export default function Home() {
   
   // Navigation & Tabs
   const [currentTab, setCurrentTab] = useState<'reports' | 'dashboard' | 'costs' | 'team' | 'admin' | 'work_plan'>('reports');
-  const [costSubTab, setCostSubTab] = useState<'monthly' | 'active' | 'inactive'>('monthly');
+  const [costSubTab, setCostSubTab] = useState<'monthly' | 'active' | 'inactive' | 'engineers'>('monthly');
   const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
   const [expandedDashProjects, setExpandedDashProjects] = useState<string[]>([]); 
   const [openMissingEng, setOpenMissingEng] = useState<string | null>(null);
@@ -390,7 +390,7 @@ export default function Home() {
     setCurrentTab(tab); 
   };
   
-  const handleCostSubTabChange = (subTab: 'monthly' | 'active' | 'inactive') => { 
+  const handleCostSubTabChange = (subTab: 'monthly' | 'active' | 'inactive' | 'engineers') => { 
     setCostSubTab(subTab); 
     setExpandedProjects([]); 
     setFilterEngineer(''); 
@@ -489,7 +489,6 @@ export default function Home() {
     );
   };
 
-
   // --- Inline Editing: Users ---
   const startEditUser = (u: AppUser) => {
     setEditingUserId(u.id);
@@ -553,7 +552,6 @@ export default function Home() {
        alert('שגיאה בעדכון פרויקט: ' + error.message);
     }
   };
-
 
   // --- Meeting Actions ---
   const openEngineerDrawer = (engName: string) => {
@@ -639,7 +637,6 @@ export default function Home() {
     }
   };
 
-  // Toggle meeting expand/collapse
   const toggleMeetingExpand = (id: number) => {
     setExpandedMeetings(prev =>
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
@@ -837,6 +834,7 @@ export default function Home() {
 
   const generateCostData = () => {
     const globalProjectCosts: Record<string, { totalCost: number, baseDays: number, engineersMap: Record<string, any>, stagesMap: Record<string, any>, projectStats: any }> = {};
+    const globalEngineerCosts: Record<string, { totalCost: number, baseDays: number, otherDays: number, projectsMap: Record<string, any> }> = {};
     const BASE_COST = assumptions.vdc_engineer_monthly_cost;
 
     allProjectsList.forEach(p => {
@@ -893,6 +891,15 @@ export default function Home() {
          const otherCost = data.otherDays * costPerDay;
          const distributedOtherCostPerProject = numProjects > 0 ? (otherCost / numProjects) : 0;
 
+         if (!globalEngineerCosts[eng]) {
+             globalEngineerCosts[eng] = { totalCost: 0, baseDays: 0, otherDays: 0, projectsMap: {} };
+         }
+         globalEngineerCosts[eng].otherDays += data.otherDays;
+         
+         if (numProjects === 0) {
+             globalEngineerCosts[eng].totalCost += otherCost;
+         }
+
          activeProjects.forEach(proj => {
             if (!globalProjectCosts[proj]) {
               const dbProject = allProjectsList.find(p => getProjectDisplayName(p, p.project_name) === proj);
@@ -913,6 +920,14 @@ export default function Home() {
             gProj.engineersMap[eng].cost += finalCost;
             gProj.engineersMap[eng].directDays += projData.totalDays;
 
+            if (!globalEngineerCosts[eng].projectsMap[proj]) {
+                globalEngineerCosts[eng].projectsMap[proj] = { cost: 0, days: 0, stagesMap: {} };
+            }
+            globalEngineerCosts[eng].projectsMap[proj].cost += finalCost;
+            globalEngineerCosts[eng].projectsMap[proj].days += projData.totalDays;
+            globalEngineerCosts[eng].baseDays += projData.totalDays;
+            globalEngineerCosts[eng].totalCost += finalCost;
+
             Object.keys(projData.stages).forEach(stageKey => {
                 const { days: stageDays, stageName, subStageName } = projData.stages[stageKey];
                 const stageDirectCost = stageDays * costPerDay;
@@ -928,30 +943,65 @@ export default function Home() {
                     gProj.stagesMap[stageName].subStages[subStageName].cost += finalStageCost;
                     gProj.stagesMap[stageName].subStages[subStageName].days += stageDays;
                 }
+
+                if (!globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName]) {
+                    globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName] = { cost: 0, days: 0, subStagesMap: {} };
+                }
+                globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].cost += finalStageCost;
+                globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].days += stageDays;
+
+                if (subStageName) {
+                    if (!globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].subStagesMap[subStageName]) {
+                        globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].subStagesMap[subStageName] = { cost: 0, days: 0 };
+                    }
+                    globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].subStagesMap[subStageName].cost += finalStageCost;
+                    globalEngineerCosts[eng].projectsMap[proj].stagesMap[stageName].subStagesMap[subStageName].days += stageDays;
+                }
             });
          });
       });
     });
 
-    const processedData = Object.keys(globalProjectCosts).map(p => {
+    const processedProjectsData = Object.keys(globalProjectCosts).map(p => {
        const pData = globalProjectCosts[p];
        const engineersArray = Object.keys(pData.engineersMap).map(e => ({ name: e, cost: pData.engineersMap[e].cost, directDays: pData.engineersMap[e].directDays })).sort((a,b) => b.cost - a.cost);
        const stagesArray = Object.keys(pData.stagesMap).map(s => {
-           const subArray = Object.keys(pData.stagesMap[s].subStages).map(sub => ({ name: sub, cost: pData.stagesMap[s].subStages[sub].cost, days: pData.stagesMap[s].subStages[sub].days })).sort((a,b) => b.cost - a.cost);
+           const subArray = Object.keys(pData.stagesMap[s].subStages).map(sub => ({ name: sub, cost: pData.stagesMap[s].subStages[sub].cost, days: pData.stagesMap[s].subStages[sub].days })).sort((a,b) => b.days - a.days);
            return { name: s, cost: pData.stagesMap[s].cost, days: pData.stagesMap[s].days, subStages: subArray };
        }).sort((a,b) => b.cost - a.cost);
 
        return { name: p, totalCost: pData.totalCost, baseDays: pData.baseDays, engineers: engineersArray, stages: stagesArray, stats: pData.projectStats };
     }).sort((a,b) => b.totalCost - a.totalCost);
 
-    const finalCostData = processedData.filter(p => p.totalCost > 0 && p.name !== 'אחר (פירוט בהערות)' && !p.name.includes('תקורות חברה'));
-    if (costSubTab === 'active') return finalCostData.filter(p => isProjectActive(p.name));
-    if (costSubTab === 'inactive') return finalCostData.filter(p => !isProjectActive(p.name));
-    return finalCostData;
+    const processedEngineersData = Object.keys(globalEngineerCosts).map(eng => {
+        const eData = globalEngineerCosts[eng];
+        const projectsArray = Object.keys(eData.projectsMap).map(pName => {
+            const p = eData.projectsMap[pName];
+            const stagesArray = Object.keys(p.stagesMap).map(sName => {
+                const s = p.stagesMap[sName];
+                const subArray = Object.keys(s.subStagesMap).map(subName => {
+                    return { name: subName, cost: s.subStagesMap[subName].cost, days: s.subStagesMap[subName].days };
+                }).sort((a,b) => b.cost - a.cost);
+                return { name: sName, cost: s.cost, days: s.days, subStages: subArray };
+            }).sort((a,b) => b.cost - a.cost);
+            return { name: pName, cost: p.cost, days: p.days, stages: stagesArray };
+        }).sort((a,b) => b.cost - a.cost);
+        
+        return { name: eng, totalCost: eData.totalCost, baseDays: eData.baseDays, otherDays: eData.otherDays, projects: projectsArray };
+    }).sort((a,b) => b.totalCost - a.totalCost);
+
+    return { projectsData: processedProjectsData, engineersData: processedEngineersData };
   };
 
   const dashboardData = generateDashboardData();
-  const costData = generateCostData();
+  const costDataPayload = generateCostData();
+  
+  let costData = costDataPayload.projectsData.filter(p => p.totalCost > 0 && p.name !== 'אחר (פירוט בהערות)' && !p.name.includes('תקורות חברה'));
+  if (costSubTab === 'active') costData = costData.filter(p => isProjectActive(p.name));
+  else if (costSubTab === 'inactive') costData = costData.filter(p => !isProjectActive(p.name));
+  
+  const engineerCostData = costDataPayload.engineersData.filter(e => e.totalCost > 0);
+
   let displayDateRange = ""; if (filterMonth) { const r = getMonthDateRange(filterMonth); displayDateRange = `(${formatDate(r.start)} - ${formatDate(r.end)})`; }
 
   const displayedCostData = costSelectedProjects.length > 0 ? costData.filter(p => costSelectedProjects.includes(p.name)) : costData;
@@ -1627,45 +1677,55 @@ export default function Home() {
                       <button onClick={() => handleCostSubTabChange('monthly')} className={`px-5 py-2 text-sm font-semibold rounded transition whitespace-nowrap ${costSubTab === 'monthly' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>חתך חודשי</button>
                       <button onClick={() => handleCostSubTabChange('active')} className={`px-5 py-2 text-sm font-semibold rounded transition whitespace-nowrap ${costSubTab === 'active' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>פרויקטים פעילים (מצטבר)</button>
                       <button onClick={() => handleCostSubTabChange('inactive')} className={`px-5 py-2 text-sm font-semibold rounded transition whitespace-nowrap ${costSubTab === 'inactive' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>ארכיון פרויקטים (מצטבר)</button>
+                      <button onClick={() => handleCostSubTabChange('engineers')} className={`px-5 py-2 text-sm font-semibold rounded transition whitespace-nowrap ${costSubTab === 'engineers' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-200/50'}`}>פרופיל מהנדס</button>
                     </div>
 
-                    <div className="relative w-full sm:w-auto">
-                      <button onClick={() => setShowCostProjMenu(!showCostProjMenu)} className="w-full sm:w-auto px-4 py-2 bg-white border border-slate-300 rounded flex items-center justify-center gap-2 text-sm font-bold text-slate-700 hover:bg-slate-50 shadow-sm transition">
-                        <Filter className="w-4 h-4 text-slate-400" /> סנן פרויקטים להצגה {costSelectedProjects.length > 0 && <span className="bg-blue-100 text-blue-700 px-1.5 rounded-full text-xs">{costSelectedProjects.length}</span>}
-                      </button>
-                      {showCostProjMenu && (
-                        <>
-                          <div className="fixed inset-0 z-40" onClick={() => setShowCostProjMenu(false)}></div>
-                          <div className="absolute top-12 right-0 w-64 bg-white border border-slate-200 shadow-xl rounded-md z-50 p-3 max-h-72 overflow-y-auto text-sm font-normal">
-                             <div className="font-bold text-slate-800 mb-2 border-b pb-1">בחר פרויקטים להצגה:</div>
-                             {costData.map(p => (
-                               <label key={p.name} className="flex items-center gap-2 p-1.5 hover:bg-slate-50 cursor-pointer rounded">
-                                 <input type="checkbox" checked={costSelectedProjects.includes(p.name)}
-                                   onChange={() => {
-                                     if (costSelectedProjects.includes(p.name)) setCostSelectedProjects(costSelectedProjects.filter(x => x !== p.name));
-                                     else setCostSelectedProjects([...costSelectedProjects, p.name]);
-                                   }} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                 />
-                                 <span className="text-slate-700 truncate" title={p.name}>{p.name}</span>
-                               </label>
-                             ))}
-                             <div className="pt-2 mt-2 border-t flex justify-end"><button onClick={() => setCostSelectedProjects([])} className="text-xs font-bold text-blue-600 hover:underline">נקה סינון (הצג הכל)</button></div>
-                          </div>
-                        </>
-                      )}
-                    </div>
+                    {costSubTab !== 'engineers' && (
+                      <div className="relative w-full sm:w-auto">
+                        <button onClick={() => setShowCostProjMenu(!showCostProjMenu)} className="w-full sm:w-auto px-4 py-2 bg-white border border-slate-300 rounded flex items-center justify-center gap-2 text-sm font-bold text-slate-700 hover:bg-slate-50 shadow-sm transition">
+                          <Filter className="w-4 h-4 text-slate-400" /> סנן פרויקטים להצגה {costSelectedProjects.length > 0 && <span className="bg-blue-100 text-blue-700 px-1.5 rounded-full text-xs">{costSelectedProjects.length}</span>}
+                        </button>
+                        {showCostProjMenu && (
+                          <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowCostProjMenu(false)}></div>
+                            <div className="absolute top-12 right-0 w-64 bg-white border border-slate-200 shadow-xl rounded-md z-50 p-3 max-h-72 overflow-y-auto text-sm font-normal">
+                               <div className="font-bold text-slate-800 mb-2 border-b pb-1">בחר פרויקטים להצגה:</div>
+                               {costData.map(p => (
+                                 <label key={p.name} className="flex items-center gap-2 p-1.5 hover:bg-slate-50 cursor-pointer rounded">
+                                   <input type="checkbox" checked={costSelectedProjects.includes(p.name)}
+                                     onChange={() => {
+                                       if (costSelectedProjects.includes(p.name)) setCostSelectedProjects(costSelectedProjects.filter(x => x !== p.name));
+                                       else setCostSelectedProjects([...costSelectedProjects, p.name]);
+                                     }} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                   />
+                                   <span className="text-slate-700 truncate" title={p.name}>{p.name}</span>
+                                 </label>
+                               ))}
+                               <div className="pt-2 mt-2 border-t flex justify-end"><button onClick={() => setCostSelectedProjects([])} className="text-xs font-bold text-blue-600 hover:underline">נקה סינון (הצג הכל)</button></div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {costSubTab !== 'monthly' && (
+                  {costSubTab !== 'monthly' && costSubTab !== 'engineers' && (
                     <button onClick={() => { setIsCompareMode(true); setCompareSelected([]); }} className="flex items-center justify-center w-full md:w-auto gap-2 px-5 py-2 bg-slate-800 text-white rounded-md font-bold hover:bg-slate-700 transition shadow-md text-sm"><BarChart3 className="w-4 h-4"/> השוואת פרויקטים</button>
                   )}
                 </div>
               )}
 
-              {isCompareMode ? (
+              {isCompareMode && costSubTab !== 'engineers' ? (
                 <div className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
-                  <div className="flex justify-between items-center bg-white p-4 rounded-md shadow-sm border border-slate-200 border-l-4 border-l-blue-600">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 rounded-md shadow-sm border border-slate-200 border-l-4 border-l-blue-600">
                      <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><BarChart3 className="w-5 h-5 text-blue-500" /> מודול השוואת פרויקטים</h2>
-                     <button onClick={() => setIsCompareMode(false)} className="text-sm font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition"><X className="w-4 h-4"/> חזור לתצוגה רגילה</button>
+                     <div className="flex items-center gap-3">
+                        <button onClick={() => window.print()} disabled={compareSelected.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-md text-sm font-bold hover:bg-slate-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                          <Printer className="w-4 h-4" /> ייצוא ל-PDF
+                        </button>
+                        <button onClick={() => setIsCompareMode(false)} className="text-sm font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 transition">
+                          <X className="w-4 h-4"/> חזור לתצוגה רגילה
+                        </button>
+                     </div>
                   </div>
                   <div className="bg-slate-800 p-1.5 rounded-lg flex w-fit shadow-sm">
                      <button onClick={() => { setCompareGenMode('gen1'); setCompareSelected([]); }} className={`px-5 py-2 text-sm font-bold rounded-md transition-colors ${compareGenMode === 'gen1' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>דור 1 (תמחור בסיסי)</button>
@@ -1778,7 +1838,7 @@ export default function Home() {
                                        })}
                                     </tr>
                                     <tr>
-                                       <td className="p-3 font-bold text-emerald-800 bg-emerald-100/50 border-l border-slate-200">עלות VDC לטיפוס אב</td>
+                                       <td className="p-3 font-bold text-emerald-800 bg-emerald-100/50 border-l border-slate-200">עלות לטיפוס אב</td>
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let cost = null;
@@ -1790,7 +1850,7 @@ export default function Home() {
                                        })}
                                     </tr>
                                     <tr>
-                                       <td className="p-3 font-bold text-emerald-800 bg-emerald-100/50 border-l border-slate-200">עלות VDC לתת-טיפוס</td>
+                                       <td className="p-3 font-bold text-emerald-800 bg-emerald-100/50 border-l border-slate-200">עלות לתת-טיפוס</td>
                                        {compareSelected.map(pName => {
                                           const p = displayedCostData.find(x => x.name === pName);
                                           let cost = null;
@@ -1835,6 +1895,75 @@ export default function Home() {
                         </table>
                      </div>
                   )}
+                </div>
+              ) : costSubTab === 'engineers' ? (
+                <div className="flex flex-col gap-6 animate-in fade-in duration-300">
+                   <div className="bg-slate-800 text-slate-300 p-5 rounded-md shadow-sm border border-slate-700 mb-2">
+                      <h3 className="font-bold text-white flex items-center gap-2 text-base"><HardHat className="w-4 h-4 text-blue-400" /> פרופיל מהנדס - ניתוח עלויות והשקעה</h3>
+                      <p className="text-sm mt-1.5">הנתונים מוצגים באופן מצטבר עבור כל הפעילות שתועדה במערכת (בהתאם לסינון החודשי או הכללי שנבחר).</p>
+                   </div>
+                   {engineerCostData.map((eng, idx) => {
+                      const isExpanded = expandedProjects.includes(eng.name);
+                      return (
+                         <div key={idx} className="bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden flex flex-col transition-all">
+                            <div className="p-5 flex flex-col md:flex-row justify-between items-start md:items-center bg-white border-l-4 border-l-indigo-500 cursor-pointer hover:bg-slate-50 transition" onClick={() => toggleProjectExpand(eng.name)}>
+                               <div className="text-right mb-4 md:mb-0 flex items-center gap-4">
+                                  <div className={`p-1.5 rounded-full bg-slate-100 text-slate-500 transition-transform ${isExpanded ? 'rotate-180 bg-indigo-100 text-indigo-600' : ''}`}><ChevronDown className="w-5 h-5" /></div>
+                                  <div>
+                                     <h3 className="font-bold text-slate-900 text-xl tracking-tight flex items-center gap-2"><HardHat className="w-5 h-5 text-slate-400" /> {eng.name}</h3>
+                                     <p className="text-sm text-slate-500 mt-1 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> סה"כ ימי עבודה: <strong>{eng.baseDays + eng.otherDays}</strong> (מתוכם {eng.baseDays} ישירים בפרויקטים)</p>
+                                  </div>
+                               </div>
+                               <div className="bg-slate-900 text-white px-5 py-2.5 rounded text-lg font-bold shadow-sm tracking-wide">₪ {Math.round(eng.totalCost).toLocaleString()}</div>
+                            </div>
+                            
+                            {isExpanded && (
+                               <div className="p-6 bg-slate-50/50 border-t border-slate-100">
+                                  <h4 className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><Building2 className="w-4 h-4 text-indigo-500"/> התפלגות השקעה לפי פרויקטים:</h4>
+                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                                     {eng.projects.map((proj: any, pIdx: number) => (
+                                        <div key={pIdx} className="bg-white border border-slate-200 rounded-md shadow-sm flex flex-col overflow-hidden">
+                                           <div className="p-3.5 bg-slate-100 border-b border-slate-200 flex justify-between items-center">
+                                              <div className="font-bold text-slate-800 text-base">{proj.name}</div>
+                                              <div className="flex flex-col items-end">
+                                                 <span className="font-black text-blue-700 text-sm">₪ {Math.round(proj.cost).toLocaleString()}</span>
+                                                 <span className="text-[11px] text-slate-500 font-medium">{proj.days} ימ' עבודה</span>
+                                              </div>
+                                           </div>
+                                           <div className="p-3 flex flex-col gap-2 flex-1">
+                                              {proj.stages.map((stg: any, sIdx: number) => (
+                                                 <div key={sIdx} className="flex flex-col gap-1.5">
+                                                    <div className="flex justify-between items-center text-sm">
+                                                       <div className="flex items-center gap-1.5 text-slate-700 font-bold"><Layers className="w-3.5 h-3.5 text-slate-400"/> {stg.name}</div>
+                                                       <div className="flex items-center gap-2">
+                                                          <span className="text-xs text-slate-500">{stg.days} ימ'</span>
+                                                          <span className="font-bold text-slate-700 text-[13px]">₪ {Math.round(stg.cost).toLocaleString()}</span>
+                                                       </div>
+                                                    </div>
+                                                    {stg.subStages.length > 0 && (
+                                                       <div className="pl-4 pr-2 py-1.5 flex flex-col gap-1 border-r-2 border-slate-200 bg-slate-50 rounded-l mr-2">
+                                                          {stg.subStages.map((sub: any, subIdx: number) => (
+                                                             <div key={subIdx} className="flex justify-between items-center text-[12px]">
+                                                                <span className="text-slate-600 font-medium truncate flex-1">↳ {sub.name}</span>
+                                                                <div className="flex items-center gap-2 w-24 justify-end">
+                                                                   <span className="text-[10px] text-slate-400 opacity-80">{sub.days} ימ'</span>
+                                                                   <span className="text-slate-500 font-bold">₪ {Math.round(sub.cost).toLocaleString()}</span>
+                                                                </div>
+                                                             </div>
+                                                          ))}
+                                                       </div>
+                                                    )}
+                                                 </div>
+                                              ))}
+                                           </div>
+                                        </div>
+                                     ))}
+                                  </div>
+                               </div>
+                            )}
+                         </div>
+                      );
+                   })}
                 </div>
               ) : (
                 <>
