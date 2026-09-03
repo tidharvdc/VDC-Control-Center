@@ -1080,43 +1080,103 @@ export default function Home() {
     <React.Fragment>
       {/* אזור הדפסה */}
       <div className="hidden print:block text-black bg-white font-sans w-full" dir="rtl">
-        <style>{`@media print { @page { size: A4 portrait; margin: 8mm; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 10px !important; } }`}</style>
-        <div className="text-center mb-6 border-b border-slate-800 pb-3">
-          <h1 className="text-2xl font-black mb-1 text-slate-900">סיכום העמסות חודשי</h1>
-          <h2 className="text-sm font-medium text-slate-600">תקופת דיווח: {filterMonth} <span> {displayDateRange}</span></h2>
-        </div>
-        <div className="flex justify-between border-b-2 border-black pb-1 mb-3 text-xs font-bold px-2"><span className="w-16">אחוז משרה</span><span className="flex-1 text-right">פרויקט</span></div>
-        <div className="columns-1 sm:columns-2 lg:columns-3 gap-6 text-right" style={{ columnRule: '1px solid #e2e8f0' }}>
-          {dashboardData.map((engineer, idx) => (
-             <div key={idx} className="break-inside-avoid mb-6 page-break-inside-avoid shadow-sm border border-slate-200 rounded overflow-hidden">
-                <div className="bg-slate-100 font-bold text-[11px] p-2 border-b border-slate-300 text-slate-800 flex justify-between"><span>{engineer.engineer_name}</span><span>סה"כ ימים: {engineer.total_days}</span></div>
-                <div className="w-full text-right text-[11px] bg-white">
-                   {engineer.projects.map((proj: any, pIdx: number) => (
-                     <div key={pIdx} className="flex border-b border-slate-100 last:border-0 p-2">
-                        <div className="font-bold w-10 text-slate-700">{proj.percentage}%</div>
-                        <div className="flex-1 flex flex-col gap-0.5">
-                           <span className="font-bold text-slate-900 leading-tight">{proj.name}</span>
-                           {(() => {
-                              const s = proj.stats || {};
-                              const bldVal = s.buildings_count; const aptVal = s.apartments_count; const typVal = s.typologies_count; const pTypVal = s.parent_typologies_count; const sTypVal = s.sub_typologies_count;
-                              const hasBld = bldVal !== null && bldVal !== undefined && String(bldVal).trim() !== ''; const hasApt = aptVal !== null && aptVal !== undefined && String(aptVal).trim() !== ''; const hasTyp = typVal !== null && typVal !== undefined && String(typVal).trim() !== ''; const hasPTyp = pTypVal !== null && pTypVal !== undefined && String(pTypVal).trim() !== ''; const hasSTyp = sTypVal !== null && sTypVal !== undefined && String(sTypVal).trim() !== '';
-                              const hasAny = hasBld || hasApt || hasTyp || hasPTyp || hasSTyp;
-                              if (!hasAny) return null;
-                              return (
-                                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] text-slate-500 font-medium mt-0.5">
-                                    {hasBld && <span>בניינים: {bldVal}</span>}{hasApt && <span>דירות: {aptVal}</span>}
-                                    {s.has_sub_stages ? ( <>{hasPTyp && <span>טיפוסי אב: {pTypVal}</span>}{hasSTyp && <span>תתי-טיפוס: {sTypVal}</span>}</> ) : ( hasTyp && <span>טיפוסים: {typVal}</span> )}
-                                </div>
-                              );
-                           })()}
-                        </div>
-                     </div>
-                   ))}
-                </div>
-             </div>
-          ))}
-        </div>
-        <div className="mt-8 text-center text-[9px] text-slate-400 font-mono pt-4 border-t border-slate-200">הופק באמצעות VDC Control Center • תאריך הפקה: {new Date().toLocaleString('he-IL')}</div>
+        <style>{`
+          @media print { 
+            @page { size: A4 portrait; margin: 8mm; } 
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 10px !important; } 
+            .page-break-after { page-break-after: always; break-after: page; }
+          }
+        `}</style>
+
+        {currentTab === 'costs' && costSubTab === 'engineers' ? (
+           <div className="space-y-6">
+              {engineerCostData.map((eng, idx) => (
+                 <div key={idx} className={`p-6 bg-white border border-slate-300 rounded-lg ${idx < engineerCostData.length - 1 ? 'page-break-after' : ''}`}>
+                    <div className="flex justify-between items-center border-b-2 border-slate-900 pb-3 mb-4">
+                       <div>
+                          <h1 className="text-xl font-black text-slate-900">פרופיל מהנדס: {eng.name}</h1>
+                          <p className="text-xs text-slate-600 mt-1">VDC Control Center • סיכום עלויות והשקעה מקיף</p>
+                       </div>
+                       <div className="text-left">
+                          <span className="block text-lg font-black text-blue-900">₪ {Math.round(eng.totalCost).toLocaleString()}</span>
+                          <span className="text-[10px] text-slate-500">סה"כ עלות מועמסת ({eng.baseDays + eng.otherDays} ימ׳)</span>
+                       </div>
+                    </div>
+
+                    <div className="space-y-4">
+                       {eng.projects.map((proj: any, pIdx: number) => (
+                          <div key={pIdx} className="border border-slate-200 rounded p-3 bg-slate-50/50">
+                             <div className="flex justify-between items-center font-bold text-slate-800 text-sm border-b border-slate-200 pb-1.5 mb-2">
+                                <span>{proj.name}</span>
+                                <span>₪ {Math.round(proj.cost).toLocaleString()} ({proj.days} ימ')</span>
+                             </div>
+                             <div className="space-y-1.5 pr-2">
+                                {proj.stages.map((stg: any, sIdx: number) => (
+                                   <div key={sIdx} className="text-xs">
+                                      <div className="flex justify-between font-medium text-slate-700">
+                                         <span>• {stg.name}</span>
+                                         <span>₪ {Math.round(stg.cost).toLocaleString()} ({stg.days} ימ')</span>
+                                      </div>
+                                      {stg.subStages.length > 0 && (
+                                         <div className="pr-4 space-y-0.5 mt-1 border-r border-slate-300 mr-2">
+                                            {stg.subStages.map((sub: any, subIdx: number) => (
+                                               <div key={subIdx} className="flex justify-between text-[11px] text-slate-500">
+                                                  <span>↳ {sub.name}</span>
+                                                  <span>₪ {Math.round(sub.cost).toLocaleString()} ({sub.days} ימ')</span>
+                                               </div>
+                                            ))}
+                                         </div>
+                                      )}
+                                   </div>
+                                ))}
+                             </div>
+                          </div>
+                       ))}
+                    </div>
+                    <div className="mt-8 text-center text-[9px] text-slate-400 font-mono pt-3 border-t border-slate-200">עמוד {idx + 1} מתוך {engineerCostData.length} • הופק ב- {new Date().toLocaleDateString('he-IL')}</div>
+                 </div>
+              ))}
+           </div>
+        ) : (
+          <>
+            <div className="text-center mb-6 border-b border-slate-800 pb-3">
+              <h1 className="text-2xl font-black mb-1 text-slate-900">סיכום העמסות חודשי</h1>
+              <h2 className="text-sm font-medium text-slate-600">תקופת דיווח: {filterMonth} <span> {displayDateRange}</span></h2>
+            </div>
+            <div className="flex justify-between border-b-2 border-black pb-1 mb-3 text-xs font-bold px-2"><span className="w-16">אחוז משרה</span><span className="flex-1 text-right">פרויקט</span></div>
+            <div className="columns-1 sm:columns-2 lg:columns-3 gap-6 text-right" style={{ columnRule: '1px solid #e2e8f0' }}>
+              {dashboardData.map((engineer, idx) => (
+                 <div key={idx} className="break-inside-avoid mb-6 page-break-inside-avoid shadow-sm border border-slate-200 rounded overflow-hidden">
+                    <div className="bg-slate-100 font-bold text-[11px] p-2 border-b border-slate-300 text-slate-800 flex justify-between"><span>{engineer.engineer_name}</span><span>סה"כ ימים: {engineer.total_days}</span></div>
+                    <div className="w-full text-right text-[11px] bg-white">
+                       {engineer.projects.map((proj: any, pIdx: number) => (
+                         <div key={pIdx} className="flex border-b border-slate-100 last:border-0 p-2">
+                            <div className="font-bold w-10 text-slate-700">{proj.percentage}%</div>
+                            <div className="flex-1 flex flex-col gap-0.5">
+                               <span className="font-bold text-slate-900 leading-tight">{proj.name}</span>
+                               {(() => {
+                                  const s = proj.stats || {};
+                                  const bldVal = s.buildings_count; const aptVal = s.apartments_count; const typVal = s.typologies_count; const pTypVal = s.parent_typologies_count; const sTypVal = s.sub_typologies_count;
+                                  const hasBld = bldVal !== null && bldVal !== undefined && String(bldVal).trim() !== ''; const hasApt = aptVal !== null && aptVal !== undefined && String(aptVal).trim() !== ''; const hasTyp = typVal !== null && typVal !== undefined && String(typVal).trim() !== ''; const hasPTyp = pTypVal !== null && pTypVal !== undefined && String(pTypVal).trim() !== ''; const hasSTyp = sTypVal !== null && sTypVal !== undefined && String(sTypVal).trim() !== '';
+                                  const hasAny = hasBld || hasApt || hasTyp || hasPTyp || hasSTyp;
+                                  if (!hasAny) return null;
+                                  return (
+                                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] text-slate-500 font-medium mt-0.5">
+                                        {hasBld && <span>בניינים: {bldVal}</span>}{hasApt && <span>דירות: {aptVal}</span>}
+                                        {s.has_sub_stages ? ( <>{hasPTyp && <span>טיפוסי אב: {pTypVal}</span>}{hasSTyp && <span>תתי-טיפוס: {sTypVal}</span>}</> ) : ( hasTyp && <span>טיפוסים: {typVal}</span> )}
+                                    </div>
+                                  );
+                               })()}
+                            </div>
+                         </div>
+                       ))}
+                    </div>
+                 </div>
+              ))}
+            </div>
+            <div className="mt-8 text-center text-[9px] text-slate-400 font-mono pt-4 border-t border-slate-200">הופק באמצעות VDC Control Center • תאריך הפקה: {new Date().toLocaleString('he-IL')}</div>
+          </>
+        )}
       </div>
 
       {/* אזור מסך רגיל */}
@@ -1708,7 +1768,9 @@ export default function Home() {
                       </div>
                     )}
                   </div>
-                  {costSubTab !== 'monthly' && costSubTab !== 'engineers' && (
+                  {costSubTab === 'engineers' ? (
+                    <button onClick={() => window.print()} className="flex items-center gap-2 bg-slate-800 text-white px-5 py-2.5 rounded-md font-bold hover:bg-slate-700 transition shadow-md text-sm"><Printer className="w-4 h-4" /> הפק PDF פרופילי מהנדסים</button>
+                  ) : costSubTab !== 'monthly' && (
                     <button onClick={() => { setIsCompareMode(true); setCompareSelected([]); }} className="flex items-center justify-center w-full md:w-auto gap-2 px-5 py-2 bg-slate-800 text-white rounded-md font-bold hover:bg-slate-700 transition shadow-md text-sm"><BarChart3 className="w-4 h-4"/> השוואת פרויקטים</button>
                   )}
                 </div>
@@ -1898,9 +1960,11 @@ export default function Home() {
                 </div>
               ) : costSubTab === 'engineers' ? (
                 <div className="flex flex-col gap-6 animate-in fade-in duration-300">
-                   <div className="bg-slate-800 text-slate-300 p-5 rounded-md shadow-sm border border-slate-700 mb-2">
-                      <h3 className="font-bold text-white flex items-center gap-2 text-base"><HardHat className="w-4 h-4 text-blue-400" /> פרופיל מהנדס - ניתוח עלויות והשקעה</h3>
-                      <p className="text-sm mt-1.5">הנתונים מוצגים באופן מצטבר עבור כל הפעילות שתועדה במערכת (בהתאם לסינון החודשי או הכללי שנבחר).</p>
+                   <div className="bg-slate-800 text-slate-300 p-5 rounded-md shadow-sm border border-slate-700 mb-2 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div>
+                         <h3 className="font-bold text-white flex items-center gap-2 text-base"><HardHat className="w-4 h-4 text-blue-400" /> פרופיל מהנדס - ניתוח עלויות והשקעה</h3>
+                         <p className="text-sm mt-1.5">הנתונים מוצגים באופן מצטבר עבור כל הפעילות שתועדה במערכת (בהתאם לסינון החודשי או הכללי שנבחר).</p>
+                      </div>
                    </div>
                    {engineerCostData.map((eng, idx) => {
                       const isExpanded = expandedProjects.includes(eng.name);
